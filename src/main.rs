@@ -1,4 +1,12 @@
-use bevy::{ input::mouse::MouseWheel, prelude::*, sprite::Wireframe2dPlugin };
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::f64::consts::PI;
+use rand::Rng;
+use bevy::{
+    input::mouse::MouseWheel,
+    prelude::*,
+    sprite::Wireframe2dPlugin
+};
 
 const WINDOW_WIDTH: f32 = 800.0;
 const WINDOW_HEIGHT: f32 = 600.0;
@@ -24,10 +32,13 @@ impl Default for Pawn {
 }
 
 #[derive(Component)]
-struct Thing;
+struct Thing {
+    hovered: bool,
+    _selected: bool,
+}
 
 #[derive(Component)]
-struct Selecter(u32);
+struct Selecter;
 
 #[derive(Resource)]
 struct Settings {
@@ -44,19 +55,6 @@ impl Default for Settings {
     }
 }
 
-#[derive(Resource)]
-struct HoveredWhat {
-    id: Vec<u32>,
-}
-
-impl Default for HoveredWhat {
-    fn default() -> Self {
-        Self {
-            id: vec![]
-        }
-    }
-}
-
 #[derive(Component)]
 struct DebugLog(String);
 
@@ -66,21 +64,8 @@ impl DebugLog {
     }
 }
 
-fn new_debug_log(asset_server: Res<AssetServer>) -> (Text, TextFont, BackgroundColor, DebugLog) {
-    let font_handle: Handle<Font> = asset_server.load("fonts/Menlo-Regular.ttf");
-    (
-        Text::new(""),
-        TextFont {
-            font: font_handle,
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-        DebugLog("---LOG---".to_string()),
-    )
-}
-
 #[derive(Event)]
-struct Click(Vec2);
+struct Click();
 
 #[derive(Event)]
 struct RightClick(Vec2);
@@ -108,51 +93,66 @@ fn setup(
     window.resolution.set(WINDOW_WIDTH, WINDOW_HEIGHT);
     window.title = "Bevy".to_string();
 
-    cmds.spawn(Camera2d);
-
     cmds.spawn((
-        Sprite::from_image(asset_server.load("pawn.png")),
-        Transform::from_xyz(0.0, 0.0, 1.0)
-            .with_scale(Vec3::splat(5.0 / TILE_SIZE)),
-        Thing,
-        Pawn {
-            state: PawnState::Idle
-        },
+        Camera2d,
+        Transform::from_xyz(250.0, 250.0, 0.0),
     ));
+
+    let mut rng = rand::rng();
+    for _ in 0..5 {
+        let rng_x = rng.random_range(0..10) as f32 * TILE_SIZE;
+        let rng_y = rng.random_range(0..10) as f32 * TILE_SIZE;
+        cmds.spawn((
+            Sprite::from_image(asset_server.load("pawn.png")),
+            Transform::from_xyz(rng_x, rng_y, 1.0)
+                .with_scale(Vec3::splat(5.0 / TILE_SIZE)),
+            Thing {
+                hovered: false,
+                _selected: false,
+            },
+            Pawn {
+                state: PawnState::Idle
+            },
+        ));
+    }
 }
 
-fn handle_click(
+fn click_handle(
     mouse_button_input: Res<ButtonInput<MouseButton>>,
     camera: Single<(&mut OrthographicProjection, &Transform), With<Camera2d>>,
     window: Query<&Window>,
     mut events: EventWriter<Click>,
     mut debug_log: Query<&mut DebugLog>,
 ) {
-    if let Some(mut pos) = window.single().cursor_position() {
-        pos = current_mouse_pos(pos, camera.1.translation, camera.0.scale);
-        if mouse_button_input.just_pressed(MouseButton::Left) {
-            events.send(Click(pos));
-        }
-        if let Ok(mut debug_log) = debug_log.get_single_mut() {
-            debug_log.add(format!("MousePosition x:{:.2}, y:{:.2}", pos.x, pos.y));
-        }
-    } else {
-        if let Ok(mut debug_log) = debug_log.get_single_mut() {
-            debug_log.add("MousePosition None".to_string());
+    if let Some(window) = window.get_single().ok() {
+        if let Some(mut pos) = window.cursor_position() {
+            pos = current_mouse_pos(pos, camera.1.translation, camera.0.scale);
+            if mouse_button_input.just_pressed(MouseButton::Left) {
+                events.send(Click());
+            }
+            if let Ok(mut debug_log) = debug_log.get_single_mut() {
+                debug_log.add(format!("MousePosition x:{:.2}, y:{:.2}", pos.x, pos.y));
+            }
+        } else {
+            if let Ok(mut debug_log) = debug_log.get_single_mut() {
+                debug_log.add("MousePosition NoCursor".to_string());
+            }
         }
     }
 }
 
-fn handle_right_click(
+fn right_click_handle(
     mouse_button_input: Res<ButtonInput<MouseButton>>,
     camera: Single<(&mut OrthographicProjection, &Transform), With<Camera2d>>,
     window: Query<&Window>,
     mut events: EventWriter<RightClick>,
 ) {
-    if let Some(mut pos) = window.single().cursor_position() {
-        pos = current_mouse_pos(pos, camera.1.translation, camera.0.scale);
-        if mouse_button_input.just_pressed(MouseButton::Right) {
-            events.send(RightClick(pos));
+    if let Some(window) = window.get_single().ok() {
+        if let Some(mut pos) = window.cursor_position() {
+            pos = current_mouse_pos(pos, camera.1.translation, camera.0.scale);
+            if mouse_button_input.just_pressed(MouseButton::Right) {
+                events.send(RightClick(pos));
+            }
         }
     }
 }
@@ -160,98 +160,91 @@ fn handle_right_click(
 fn select_pawn(
     mut event: EventReader<Click>,
     selecters: Query<Entity, With<Selecter>>,
-    things: Query<(Entity, &Transform), (With<Thing>, Without<Selecter>)>,
-    hovered: Res<HoveredWhat>,
+    things: Query<(&Thing, Entity), (With<Thing>, Without<Selecter>)>,
     mut cmds: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    if let Some(_pos) = event.read().next() {
-        for entity in selecters.iter() {
-            cmds.entity(entity).despawn();
-        }
-        // let pos = get_tile_pos(pos.0);
-        let hovered = things.iter().find(|e| hovered.id.contains(&e.0.index()));
-        if let Some((e, t)) = hovered{
-            cmds.spawn((
-                Sprite::from_image(asset_server.load("frame.png")),
-                Transform::from_xyz(t.translation.x, t.translation.y, 1.5)
-                    .with_scale(Vec3::splat(0.1)),
-                Selecter(e.index()),
-            ));
-        }
-    }
+    if let None = event.read().next() { return }; // if no click event then return
+    selecters.iter().for_each(|e| cmds.entity(e).despawn()); // Remove all selecters
+
+    // get the hovered thing
+    let Some(hovered) = things.iter().filter(|(c, _)| c.hovered).next() else { return };
+    let hovered = hovered.1;
+
+    // create a selecter as a child of the hovered things
+    let image_hundle = asset_server.load("frame.png");
+    let child = cmds.spawn((
+        Sprite::from_image(image_hundle),
+        Transform::from_xyz(0.0, 0.0, 1.5),
+        Selecter,
+    )).id();
+
+    cmds.entity(hovered).add_child(child);
 }
 
 fn let_move_pawn(
     mut event: EventReader<RightClick>,
-    mut pawns: Query<&mut Pawn>,
+    selecter: Query<Entity, With<Selecter>>,
+    mut pawns: Query<(&Children, &mut Pawn), With<Pawn>>,
 ) {
-    if let Some(pos) = event.read().next() {
-        let pos = get_tile_pos(pos.0);
-        for mut p in pawns.iter_mut() {
-            match p.state {
-                PawnState::Idle =>    p.state = PawnState::Move(pos),
-                PawnState::Move(_) => p.state = PawnState::Move(pos),
-            }
-        }
-    }
+    let Some(pos) = event.read().next() else { return };
+    let tile_pos = get_tile_pos(pos.0);
+
+    pawns.iter_mut().filter(|(c, _)| c.iter().any(|&e| selecter.get(e).is_ok())).for_each(|(_, mut pawn)| {
+        pawn.state = PawnState::Move(tile_pos);
+    });
 }
 
 fn move_pawn(
     mut pawns: Query<(&mut Pawn, &mut Transform)>,
     time: Res<Time>,
 ) {
-    for (p, mut t) in pawns.iter_mut() {
-        if let PawnState::Move(mut pos) = p.state {
-            if pos.x > pos.y {
-                pos.x = 1f32;
-                pos.y = pos.y / pos.x;
-            } else {
-                pos.y = 1f32;
-                pos.x = pos.x / pos.y;
-            }
+    for (mut pawn, mut pawn_pos) in pawns.iter_mut() {
+        if let PawnState::Move(dest_pos) = pawn.state {
+            let pawn_y = pawn_pos.translation.y;
+            let dest_y = dest_pos.y;
+            let pawn_x = pawn_pos.translation.x;
+            let dest_x = dest_pos.x;
 
-            t.translation.x += pos.x * time.delta_secs();
-            t.translation.y += pos.y * time.delta_secs();
+            let theta = (pawn_y - dest_y).atan2(pawn_x - dest_x) + PI as f32;
+            let dist = ((pawn_y - dest_y).powi(2) + (pawn_x - dest_x).powi(2)).sqrt();
+            let power =
+                if dist < 1.0 {
+                    pawn.state = PawnState::Idle;
+                    pawn_pos.translation.x += (dest_x - pawn_x) * time.delta_secs();
+                    pawn_pos.translation.y += (dest_y - pawn_y) * time.delta_secs();
+                    return
+                } else if dist < 10.0 {
+                    dist / 10.0 * 100.0
+                } else {
+                    100.0
+                };
+
+            pawn_pos.translation.x += theta.cos() * power * time.delta_secs();
+            pawn_pos.translation.y += theta.sin() * power * time.delta_secs();
         }
     };
 }
 
-fn move_selecter(
-    mut selecters: Query<(&Selecter, &mut Transform), With<Selecter>>,
-    things: Query<(Entity, &Transform), (With<Thing>, Without<Selecter>)>,
-) {
-    for (selecter, mut selecter_t) in selecters.iter_mut() {
-        if let Some(t) = things.iter().find(|e| e.0.index() == selecter.0) {
-            selecter_t.translation = t.1.translation;
-        }
-    }
-}
-
-fn hovered_what(
-    mut res: ResMut<HoveredWhat>,
-    things: Query<(Entity, &Transform), With<Thing>>,
-    camera: Single<(&mut OrthographicProjection, &Transform), With<Camera2d>>,
+fn is_thing_hovered(
+    mut things: Query<(&Transform, &mut Thing), With<Thing>>,
+    camera: Query<(&mut OrthographicProjection, &Transform), With<Camera2d>>,
     window: Query<&Window>,
-    mut debug_log: Query<&mut DebugLog>,
 ) {
-    if let Some(pos) = window.single().cursor_position() {
-        let pos = current_mouse_pos(pos, camera.1.translation ,camera.0.scale);
-        res.id.clear();
+    let Some(window) = window.get_single().ok() else { return };
+    let Some(cursor_pos) = window.cursor_position() else { return };
 
-        for t in things.iter() {
-            let x = t.1.translation.x;
-            let y = t.1.translation.y;
-            let half_size = TILE_SIZE / 2.0;
+    for (transform, mut component) in things.iter_mut() {
+        let cursor_pos = current_mouse_pos(cursor_pos, camera.single().1.translation, camera.single().0.scale);
+        let thing_x = transform.translation.x;
+        let thing_y = transform.translation.y;
+        let half_size = TILE_SIZE / 2.0;
 
-            if ((x - half_size)..(x + half_size)).contains(&pos.x)
-            && ((y - half_size)..(y + half_size)).contains(&pos.y) {
-                res.id.push(t.0.index());
-            }
-        }
-
-        if let Ok(mut debug_log) = debug_log.get_single_mut() {
-            debug_log.add(format!("HoveredWhat: {:?}", res.id));
+        if ((thing_x - half_size)..(thing_x + half_size)).contains(&cursor_pos.x)
+        && ((thing_y - half_size)..(thing_y + half_size)).contains(&cursor_pos.y) {
+            component.hovered = true;
+        } else {
+            component.hovered = false;
         }
     }
 }
@@ -307,56 +300,65 @@ fn move_camera(
     camera.translation.x += dx * time.delta_secs();
     camera.translation.y += dy * time.delta_secs();
 
-    // debug!
-    if let Ok(mut debug_log) = debug_log.get_single_mut() {
-        debug_log.add(format!(
-            "CameraPosition x:{:.2}, y:{:.2}",
-            camera.translation.x,
-            camera.translation.y
-        ));
-    };
+    // Add a camera position to the log
+    let Some(mut debug_log) = debug_log.get_single_mut().ok() else { return };
+    debug_log.add(format!(
+        "CameraPosition x:{:.2}, y:{:.2}",
+        camera.translation.x,
+        camera.translation.y
+    ));
 }
 
 fn zoom_camera(
     mut camera: Query<&mut OrthographicProjection, With<Camera2d>>,
     mut evr_scroll: EventReader<MouseWheel>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut debug_log: Query<&mut DebugLog>,
     settings: Res<Settings>,
     time: Res<Time>,
 ) {
-    let mut camera = camera.single_mut();
     use bevy::input::mouse::MouseScrollUnit;
+
+    let mut camera = camera.single_mut();
     let evr_scroll_first = evr_scroll.read().next();
-    if let Some(ev) = evr_scroll_first {
-        if ev.unit == MouseScrollUnit::Pixel {
-            let ds = ev.y * settings.camera_zoom_speed * time.delta_secs();
+
+    let Some(ev) = evr_scroll_first else { return };
+    match ev.unit {
+        MouseScrollUnit::Line => {
+            let shift_speed = if keys.pressed(KeyCode::ShiftLeft) { 10.0 } else { 1.0 };
+            let ds = ev.y * settings.camera_zoom_speed * shift_speed * 20.0 * time.delta_secs();
             let post_scale = camera.scale + ds;
 
             if 0.1 < post_scale && post_scale < 10.0 {
                 camera.scale += ds;
             }
-        }
+        },
+        MouseScrollUnit::Pixel => {
+            let shift_speed = if keys.pressed(KeyCode::ShiftLeft) { 10.0 } else { 1.0 };
+            let ds = ev.y * settings.camera_zoom_speed * shift_speed * time.delta_secs();
+            let post_scale = camera.scale + ds;
+
+            if 0.1 < post_scale && post_scale < 10.0 {
+                camera.scale += ds;
+            }
+        },
     }
-    // debug!
-    if let Ok(mut debug_log) = debug_log.get_single_mut() {
-        debug_log.add(format!("CameraScale: {:.2}", camera.scale));
-    };
+
+    // Add a camera scale to the log
+    let Some(mut debug_log) = debug_log.get_single_mut().ok() else { return };
+    debug_log.add(format!("CameraScale: {:.2}", camera.scale));
 }
 
 fn output_log(
     mut text: Query<&mut Text, With<DebugLog>>,
     mut buf: Query<&mut DebugLog>,
 ) {
-    let text = text.get_single_mut();
-    let buf = buf.get_single_mut();
-
-    if let (Ok(mut text), Ok(mut buf)) = (text, buf) {
-        text.0 = buf.0.clone();
-        buf.0 = "---LOG---".to_string();
-    }
+    let (Some(mut text), Some(mut buf)) = (text.get_single_mut().ok(), buf.get_single_mut().ok()) else { return };
+    text.0 = buf.0.clone();
+    buf.0 = "--- LOG ---".to_string();
 }
 
-fn show_hide_log(
+fn toggle_log(
     entity: Query<Entity, With<DebugLog>>,
     mut cmds: Commands,
     asset_server: Res<AssetServer>,
@@ -364,11 +366,20 @@ fn show_hide_log(
 ) {
     if !keys.just_pressed(KeyCode::KeyH) { return }
 
-    if let Ok(e) = entity.get_single() {
-        cmds.entity(e).despawn();
-    } else {
-        cmds.spawn(new_debug_log(asset_server));
-    }
+    let Some(e) = entity.get_single().ok() else {
+        let font_handle = asset_server.load("fonts/Menlo-Regular.ttf");
+        cmds.spawn((
+            Text::new(""),
+            TextFont {
+                font: font_handle,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+            DebugLog("--- LOG ---".to_string())
+        ));
+        return
+    };
+    cmds.entity(e).despawn();
 }
 
 fn close_on_q(
@@ -376,10 +387,9 @@ fn close_on_q(
     window: Query<(Entity, &Window)>,
     input: Res<ButtonInput<KeyCode>>,
 ) {
-    if let Ok((window, _focus)) = window.get_single() {
-        if input.just_pressed(KeyCode::KeyQ) {
-            cmds.entity(window).despawn();
-        }
+    let Ok((window, _focus)) = window.get_single() else { return };
+    if input.just_pressed(KeyCode::KeyQ) {
+        cmds.entity(window).despawn();
     }
 }
 
@@ -390,7 +400,6 @@ fn main() {
             Wireframe2dPlugin,
         ))
         .insert_resource(Settings::default())
-        .insert_resource(HoveredWhat::default())
         .add_event::<Click>()
         .add_event::<RightClick>()
         .add_systems(Startup, (
@@ -398,18 +407,17 @@ fn main() {
             spawn_tile,
         ))
         .add_systems(Update, (
-            handle_click,
-            handle_right_click,
+            click_handle,
+            right_click_handle,
             select_pawn,
-            move_selecter,
             let_move_pawn,
             move_pawn,
-            hovered_what,
+            is_thing_hovered,
             move_camera,
             zoom_camera,
             output_log,
-            show_hide_log,
+            toggle_log,
             close_on_q,
-        ))
+        ).chain())
         .run();
 }
