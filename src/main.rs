@@ -4,8 +4,10 @@ use std::f64::consts::PI;
 use rand::Rng;
 use toml;
 use bevy::{
-    input::mouse::MouseWheel, prelude::*, sprite::Wireframe2dPlugin
+    input::mouse::MouseWheel,
+    prelude::*
 };
+use bevy_embedded_assets::EmbeddedAssetPlugin;
 
 const DEFAULT_WINDOW_WIDTH: f32 = 1600.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 900.0;
@@ -19,7 +21,6 @@ struct MapInfo {
 
 enum TileKey {
     Decorationable(),
-    
 }
 
 #[derive(Component)]
@@ -93,7 +94,7 @@ fn setup(
     mut windows: Query<&mut Window>,
 ) {
     // ウィンドウ
-    let mut window = windows.single_mut();
+    let mut window = windows.single_mut().unwrap();
     window.resolution.set(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
     window.resizable = false;
     window.enabled_buttons.maximize = false;
@@ -131,13 +132,13 @@ fn send_resouce_mouse_position(
     button: Res<ButtonInput<MouseButton>>,
     mut mouse_position: ResMut<MousePosition>,
     window: Query<&Window>,
-    camera: Query<(&Transform, &OrthographicProjection), With<Camera2d>>,
+    camera: Query<(&Transform, &Projection), With<Camera2d>>,
 ) {
-    let Some(window) = window.get_single().ok() else { return };
-    let Some(camera) = camera.get_single().ok() else { return };
+    let Some(window) = window.single().ok() else { return };
+    let Some(camera) = camera.single().ok() else { return };
 
     let transform = camera.0.translation;
-    let scale = camera.1.scale;
+    let scale = if let Projection::Orthographic(o) = camera.1 { o.scale } else { return };
 
     if let Some(position) = window.cursor_position() {
         let field_position = Vec2 {
@@ -176,7 +177,7 @@ fn log_mouse_position(
     mouse_position: Res<MousePosition>,
     mut debug_log: Query<&mut DebugLog>,
 ) {
-    let Some(mut debug_log) = debug_log.get_single_mut().ok() else { return };
+    let Some(mut debug_log) = debug_log.single_mut().ok() else { return };
 
     let string = |opt_vec2: Option<Vec2>| {
         if let Some(vec2) = opt_vec2 {
@@ -233,14 +234,18 @@ fn let_move_pawn(
     mouse_position: Res<MousePosition>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     selecter: Query<Entity, With<Selecter>>,
-    mut pawns: Query<(&Children, &mut Pawn), With<Pawn>>,
+    pawns: Query<(&Children, &mut Pawn), With<Pawn>>,
 ) {
     if !mouse_button.just_pressed(MouseButton::Right) { return };
     let Some(mouse_position) = mouse_position.field_tile_rounded else { return };
 
-    for (_, mut pawn) in pawns.iter_mut().filter(|(c, _)| c.iter().any(|&e| selecter.get(e).is_ok())) {
-        pawn.state = PawnState::Move(mouse_position);
-    };
+    for (children, mut pawn) in pawns {
+        for &child in children {
+            if let Ok(_) = selecter.get(child) {
+                pawn.state = PawnState::Move(mouse_position);
+            }
+        }
+    }
 }
 
 fn move_pawn(
@@ -325,8 +330,8 @@ fn log_camera_position(
     camera: Query<&Transform, With<Camera2d>>,
     mut debug_log: Query<&mut DebugLog>,
 ) {
-    let Some(camera) = camera.get_single().ok() else { return };
-    let Some(mut debug_log) = debug_log.get_single_mut().ok() else { return };
+    let Some(camera) = camera.single().ok() else { return };
+    let Some(mut debug_log) = debug_log.single_mut().ok() else { return };
     debug_log.add(format!(
         "CameraPosition x:{:.2}, y:{:.2}",
         camera.translation.x,
@@ -342,7 +347,7 @@ fn move_camera(
     time: Res<Time>,
     mut camera: Query<&mut Transform, With<Camera2d>>,
 ) {
-    let Some(mut camera) = camera.get_single_mut().ok() else { return };
+    let Some(mut camera) = camera.single_mut().ok() else { return };
     let mut distance = Vec2::ZERO;
 
     if mouse_button.pressed(MouseButton::Middle) {
@@ -374,23 +379,25 @@ fn move_camera(
 }
 
 fn log_camera_scale(
-    camera: Query<&OrthographicProjection, With<Camera2d>>,
+    camera: Query<&Projection, With<Camera2d>>,
     mut debug_log: Query<&mut DebugLog>,
 ) {
-    let Some(camera) = camera.get_single().ok() else { return };
-    let Some(mut debug_log) = debug_log.get_single_mut().ok() else { return };
+    let Some(camera) = camera.single().ok() else { return };
+    let scale = if let Projection::Orthographic(o) = camera { o.scale } else { return };
 
-    debug_log.add(format!("CameraScale: {:.2}", camera.scale));
+    let Some(mut debug_log) = debug_log.single_mut().ok() else { return };
+
+    debug_log.add(format!("CameraScale: {:.2}", scale));
 }
 
 fn zoom_camera(
-    mut camera: Query<&mut OrthographicProjection, With<Camera2d>>,
+    mut camera: Query<&mut Projection, With<Camera2d>>,
     mut event_read_scroll: EventReader<MouseWheel>,
     keys: Res<ButtonInput<KeyCode>>,
     settings: Res<Settings>,
     time: Res<Time>,
 ) {
-    let Some(mut camera) = camera.get_single_mut().ok() else { return };
+    let Some(mut camera) = camera.single_mut().ok() else { return };
     let Some(ev) = event_read_scroll.read().next() else { return };
 
     let shift_multiplier =
@@ -402,19 +409,21 @@ fn zoom_camera(
 
     let change = ev.y * settings.camera_zoom_speed * shift_multiplier * 20.0 * time.delta_secs();
 
-    let post_scale = camera.scale - change;
+    if let Projection::Orthographic(ortho) = camera.as_mut() {
+        let post_scale = ortho.scale - change;
 
-    if (0.1..10.0).contains(&post_scale) {
-        camera.scale -= change;
-    }
+        if (0.1..10.0).contains(&post_scale) {
+            ortho.scale -= change;
+        }
+    };
 }
 
 fn output_log(
     mut text: Query<&mut Text, With<DebugLog>>,
     mut buf: Query<&mut DebugLog>,
 ) {
-    let Some(mut text) = text.get_single_mut().ok() else { return };
-    let Some(mut buf) = buf.get_single_mut().ok() else { return };
+    let Some(mut text) = text.single_mut().ok() else { return };
+    let Some(mut buf) = buf.single_mut().ok() else { return };
 
     text.0 = buf.0.clone();
     buf.0 = "--- LOG ---".to_string();
@@ -428,7 +437,7 @@ fn toggle_log(
 ) {
     if !keys.just_pressed(KeyCode::KeyH) { return }
 
-    if let Some(e) = entity.get_single().ok() {
+    if let Some(e) = entity.single().ok() {
         commands.entity(e).despawn();
     } else {
         commands.spawn((
@@ -448,7 +457,8 @@ fn close_on_q(
     window: Query<(Entity, &Window)>,
     input: Res<ButtonInput<KeyCode>>,
 ) {
-    let Some((window, _focus)) = window.get_single().ok() else { return };
+    let Some((window, _focus)) = window.single().ok() else { return };
+
     if input.just_pressed(KeyCode::KeyQ) {
         commands.entity(window).despawn();
     }
@@ -458,7 +468,7 @@ fn main() {
     App::new()
         .add_plugins((
             DefaultPlugins,
-            Wireframe2dPlugin,
+            EmbeddedAssetPlugin::default(),
         ))
         .insert_resource(Settings::default())
         .insert_resource(MousePosition{
