@@ -114,7 +114,7 @@ fn spawn_pawn(
         let rng_y = rng.random_range(-half_tile_range..half_tile_range) as f32 * TILE_SIZE;
 
         commands.spawn((
-            Sprite::from_image(asset_server.load("pawn.png")),
+            Sprite::from_image(asset_server.load("embedded://pawn.png")),
             Transform::from_xyz(rng_x, rng_y, 1.0)
                 .with_scale(Vec3::splat(TILE_SIZE / 512.0)),
             Thing {
@@ -220,7 +220,7 @@ fn select_pawn(
     let hovered = hovered.1;
 
     // create a selecter as a child of the hovered things
-    let image_hundle = asset_server.load("frame.png");
+    let image_hundle = asset_server.load("embedded://frame.png");
     let child = commands.spawn((
         Sprite::from_image(image_hundle),
         Transform::from_xyz(0.0, 0.0, 1.5),
@@ -298,7 +298,7 @@ fn spawn_tile(
 ) {
     let t: fn(i32) -> f32 = |i| i as f32 * TILE_SIZE;
 
-    let image_hundle = asset_server.load("debug_tile.png");
+    let image_hundle = asset_server.load("embedded://debug_tile.png");
 
     let half_tile_range = TILE_RANGE / 2;
 
@@ -443,7 +443,7 @@ fn toggle_log(
         commands.spawn((
             Text::new(""),
             TextFont {
-                font: asset_server.load("fonts/Menlo-Regular.ttf"),
+                font: asset_server.load("embedded://fonts/Menlo-Regular.ttf"),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
@@ -467,8 +467,8 @@ fn close_on_q(
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins,
             EmbeddedAssetPlugin::default(),
+            DefaultPlugins,
         ))
         .insert_resource(Settings::default())
         .insert_resource(MousePosition{
